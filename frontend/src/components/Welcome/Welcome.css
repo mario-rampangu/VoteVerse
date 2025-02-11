@@ -1,0 +1,90 @@
+.welcome-container {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #f5f5f5;
+  padding: 2rem;
+}
+
+.welcome-content {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 800px;
+}
+
+.welcome-content h1 {
+  text-align: center;
+  color: #333;
+  margin-bottom: 2rem;
+}
+
+.welcome-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.welcome-actions button {
+  padding: 1rem;
+  border: none;
+  border-radius: 4px;
+  background-color: #4a90e2;
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.welcome-actions button:hover {
+  background-color: #357abd;
+}
+
+.logout-button {
+  background-color: #dc3545 !important;
+}
+
+.logout-button:hover {
+  background-color: #c82333 !important;
+}
+
+/* Admin specific styles */
+.admin .welcome-content {
+  max-width: 1000px;
+}
+
+.admin-greeting {
+  text-align: center;
+  color: #666;
+  margin-bottom: 2rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.stat-box {
+  background-color: #f8f9fa;
+  padding: 1.5rem;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.stat-box h3 {
+  color: #666;
+  margin-bottom: 0.5rem;
+}
+
+.stat-box p {
+  color: #4a90e2;
+  font-size: 2rem;
+  font-weight: bold;
+  margin: 0;
+}
