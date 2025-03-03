@@ -29,7 +29,6 @@ type Group struct {
 	CreatedAt   primitive.DateTime `bson:"created_at" json:"created_at"`
 	UpdatedAt   primitive.DateTime `bson:"updated_at" json:"updated_at"`
 	IsActive    bool               `bson:"is_active" json:"is_active"`
-	IsMember    bool               `bson:"-" json:"is_member"` // Not stored in DB, computed on the fly
 }
 
 // GroupMember represents a user's membership in a group

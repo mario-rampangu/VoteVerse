@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Group, groupApi, adminApi } from '../services/api';
+import { Group, groupApi } from '../services/api';
 import { Button, Card, Container, Form, Modal, Spinner } from 'react-bootstrap';
 import { toast } from 'react-toastify';
 import Layout from './common/Layout';
-import { isAdmin } from '../services/auth';
 
 const GroupList: React.FC = () => {
   const navigate = useNavigate();
@@ -16,39 +15,17 @@ const GroupList: React.FC = () => {
     name: '',
     description: '',
   });
-  const [isAdminView, setIsAdminView] = useState(() => {
-    // Check if admin view mode is enabled in localStorage
-    const savedViewMode = localStorage.getItem('adminViewMode');
-    return savedViewMode === 'admin';
-  });
 
   // Fetch groups on component mount
   useEffect(() => {
     fetchGroups();
-  }, [isAdminView]);
+  }, []);
 
   const fetchGroups = async () => {
     try {
       setLoading(true);
-      let response;
-      
-      // Use admin API if in admin view mode
-      if (isAdminView) {
-        response = await adminApi.getAllGroups();
-        console.log('Admin view: Groups received from API:', response.data);
-      } else {
-        response = await groupApi.list();
-        console.log('User view: Groups received from API:', response.data);
-      }
-      
-      // Ensure is_member is set for each group
-      const processedGroups = response.data.map((group: any) => ({
-        ...group,
-        is_member: group.is_member === true
-      }));
-      
-      console.log('Processed groups with is_member:', processedGroups);
-      setGroups(processedGroups || []);
+      const response = await groupApi.list();
+      setGroups(response.data || []);
     } catch (error: any) {
       console.error('Error fetching groups:', error);
       toast.error(error.message || 'Failed to fetch groups');
@@ -67,16 +44,7 @@ const GroupList: React.FC = () => {
     try {
       setLoading(true);
       const response = await groupApi.search(searchQuery);
-      console.log('Search results from API:', response.data);
-      
-      // Ensure is_member is set for each group
-      const processedGroups = response.data.map((group: any) => ({
-        ...group,
-        is_member: group.is_member === true
-      }));
-      
-      console.log('Processed search results with is_member:', processedGroups);
-      setGroups(processedGroups || []);
+      setGroups(response.data || []);
     } catch (error: any) {
       console.error('Error searching groups:', error);
       toast.error(error.message || 'Failed to search groups');
@@ -106,9 +74,6 @@ const GroupList: React.FC = () => {
         Object.entries(error.details.requirements).forEach(([field, message]) => {
           toast.error(`${field}: ${message}`);
         });
-      } else if (error.message && error.message.includes('Failed to create group')) {
-        // Check if it's a duplicate group name error
-        toast.error('Group with same name already exists');
       } else {
         toast.error(error.message || 'Failed to create group');
       }
@@ -117,45 +82,13 @@ const GroupList: React.FC = () => {
 
   const handleJoinGroup = async (groupId: string) => {
     try {
-      const updatedGroup = await groupApi.join(groupId);
-      console.log('Join group response:', updatedGroup);
+      await groupApi.join(groupId);
       toast.success('Successfully joined group');
-      
-      // Update the groups list with the updated group
-      setGroups(groups.map(group => 
-        group.id === groupId 
-          ? { ...group, is_member: true } 
-          : group
-      ));
+      fetchGroups();
     } catch (error: any) {
       console.error('Error joining group:', error);
       toast.error(error.message || 'Failed to join group');
     }
-  };
-
-  const handleLeaveGroup = async (groupId: string) => {
-    try {
-      await groupApi.leave(groupId);
-      toast.success('Successfully left group');
-      
-      // Update the groups list with the updated group
-      setGroups(groups.map(group => 
-        group.id === groupId 
-          ? { ...group, is_member: false } 
-          : group
-      ));
-    } catch (error: any) {
-      console.error('Error leaving group:', error);
-      toast.error(error.message || 'Failed to leave group');
-    }
-  };
-
-  const toggleViewMode = () => {
-    const newViewMode = !isAdminView;
-    setIsAdminView(newViewMode);
-    // Save view mode to localStorage
-    localStorage.setItem('adminViewMode', newViewMode ? 'admin' : 'user');
-    setLoading(true);
   };
 
   if (loading) {
@@ -193,53 +126,30 @@ const GroupList: React.FC = () => {
         </Form>
 
         <div className="row g-4">
-          {groups.map((group) => {
-            console.log(`Group ${group.name} - is_member:`, group.is_member);
-            const isMember = Boolean(group.is_member);
-            console.log(`Group ${group.name} - isMember (converted):`, isMember);
-            
-            return (
-              <div key={group.id} className="col-md-6 col-lg-4">
-                <Card>
-                  <Card.Body>
-                    <Card.Title>{group.name}</Card.Title>
-                    <Card.Text>{group.description}</Card.Text>
-                    <div className="d-flex justify-content-between align-items-center">
-                      <Button
-                        variant="primary"
-                        onClick={() => navigate(`/groups/${group.id}`)}
-                      >
-                        View Polls
-                      </Button>
-                      {isMember ? (
-                        <div className="d-flex gap-2">
-                          <Button
-                            variant="success"
-                            disabled
-                          >
-                            Joined
-                          </Button>
-                          <Button
-                            variant="outline-danger"
-                            onClick={() => handleLeaveGroup(group.id)}
-                          >
-                            Leave
-                          </Button>
-                        </div>
-                      ) : (
-                        <Button
-                          variant="outline-primary"
-                          onClick={() => handleJoinGroup(group.id)}
-                        >
-                          Join Group
-                        </Button>
-                      )}
-                    </div>
-                  </Card.Body>
-                </Card>
-              </div>
-            );
-          })}
+          {groups.map((group) => (
+            <div key={group.id} className="col-md-6 col-lg-4">
+              <Card>
+                <Card.Body>
+                  <Card.Title>{group.name}</Card.Title>
+                  <Card.Text>{group.description}</Card.Text>
+                  <div className="d-flex justify-content-between align-items-center">
+                    <Button
+                      variant="primary"
+                      onClick={() => navigate(`/groups/${group.id}`)}
+                    >
+                      View Polls
+                    </Button>
+                    <Button
+                      variant="outline-primary"
+                      onClick={() => handleJoinGroup(group.id)}
+                    >
+                      Join Group
+                    </Button>
+                  </div>
+                </Card.Body>
+              </Card>
+            </div>
+          ))}
         </div>
 
         {/* Create Group Modal */}
@@ -299,4 +209,4 @@ const GroupList: React.FC = () => {
   );
 };
 
-export default GroupList;
+export default GroupList; 

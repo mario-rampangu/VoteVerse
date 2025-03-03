@@ -56,12 +56,6 @@ export const getProfile = async (): Promise<User> => {
 export const saveAuthData = (data: AuthResponse) => {
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
-    
-    // Also store user role separately for easier access
-    localStorage.setItem('user_role', data.user.role);
-    
-    console.log('Auth data saved:', data.user);
-    console.log('User role:', data.user.role);
 };
 
 export const getAuthData = () => {
@@ -74,28 +68,14 @@ export const getAuthData = () => {
 export const clearAuthData = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    localStorage.removeItem('user_role');
-    localStorage.removeItem('adminViewMode');
 };
 
 export const isAdmin = () => {
-    // Get user role directly from localStorage for better performance
-    const userRole = localStorage.getItem('user_role');
-    const isAdminUser = userRole === 'admin';
-    
-    console.log('isAdmin check - userRole:', userRole, 'isAdmin:', isAdminUser);
-    
-    // Fallback to checking user object if role not found
-    if (!userRole) {
-        const { user } = getAuthData();
-        console.log('Fallback user check:', user);
-        return user?.role === 'admin';
-    }
-    
-    return isAdminUser;
+    const { user } = getAuthData();
+    return user?.role === 'admin';
 };
 
 export const isAuthenticated = () => {
     const { token } = getAuthData();
     return !!token;
-};
+}; 
