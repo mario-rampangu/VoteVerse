@@ -14,6 +14,14 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requiredRole 
   const location = useLocation();
 
   useEffect(() => {
+    // Log the current location and path
+    console.log('[ProtectedRoute] Current location:', {
+      pathname: location.pathname,
+      search: location.search,
+      state: location.state,
+      params: new URLSearchParams(location.search).toString()
+    });
+
     const verifyAuth = async () => {
       try {
         if (!isAuthenticated()) {
@@ -34,6 +42,9 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requiredRole 
       } catch (error) {
         console.error('Auth verification failed:', error);
         setIsAuthorized(false);
+        // Clear any invalid auth data
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
       } finally {
         setIsLoading(false);
       }
@@ -47,10 +58,18 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requiredRole 
   }
 
   if (!isAuthorized) {
+    console.log('[ProtectedRoute] Not authorized, redirecting to signin');
     // Redirect to login with return path
-    return <Navigate to="/signin" state={{ from: location }} replace />;
+    return (
+      <Navigate
+        to="/signin"
+        state={{ from: location.pathname }}
+        replace
+      />
+    );
   }
 
+  console.log('[ProtectedRoute] Authorized, rendering children');
   return <>{children}</>;
 };
 
