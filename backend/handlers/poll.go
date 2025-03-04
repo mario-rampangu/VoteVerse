@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 	"voteverse/models"
 
@@ -11,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // CreatePollRequest represents the request body for creating a poll
@@ -33,9 +35,12 @@ type PollOption struct {
 func CreatePoll(c *gin.Context) {
 	var req CreatePollRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("Error binding JSON for poll creation: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	log.Printf("Received poll creation request: %+v", req)
 
 	userIDStr, _ := c.Get("user_id")
 	userID, _ := primitive.ObjectIDFromHex(userIDStr.(string))
@@ -45,6 +50,7 @@ func CreatePoll(c *gin.Context) {
 	var groupID primitive.ObjectID
 	if req.Visibility == "group" {
 		if req.GroupID == "" {
+			log.Printf("Group ID is required for group polls")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Group ID is required for group polls"})
 			return
 		}
@@ -52,6 +58,7 @@ func CreatePoll(c *gin.Context) {
 		var err error
 		groupID, err = primitive.ObjectIDFromHex(req.GroupID)
 		if err != nil {
+			log.Printf("Invalid group ID: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
 			return
 		}
@@ -62,6 +69,7 @@ func CreatePoll(c *gin.Context) {
 			"user_id":  userID,
 		})
 		if err != nil || count == 0 {
+			log.Printf("User %s is not a member of group %s", userID.Hex(), groupID.Hex())
 			c.JSON(http.StatusForbidden, gin.H{"error": "Not a member of this group"})
 			return
 		}
@@ -79,6 +87,22 @@ func CreatePoll(c *gin.Context) {
 		})
 	}
 
+	log.Printf("Created %d poll options", len(pollOptions))
+
+	// Set default start time to now if not provided
+	startTime := req.StartTime
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+
+	// Set default end time to 24 hours from start time if not provided
+	endTime := req.EndTime
+	if endTime.IsZero() {
+		endTime = startTime.Add(24 * time.Hour)
+	}
+
+	log.Printf("Poll timing: Start=%v, End=%v", startTime, endTime)
+
 	// Create poll
 	poll := models.Poll{
 		ID:          primitive.NewObjectID(),
@@ -87,8 +111,8 @@ func CreatePoll(c *gin.Context) {
 		Title:       req.Title,
 		Description: req.Description,
 		Options:     pollOptions,
-		StartTime:   primitive.NewDateTimeFromTime(req.StartTime),
-		EndTime:     primitive.NewDateTimeFromTime(req.EndTime),
+		StartTime:   primitive.NewDateTimeFromTime(startTime),
+		EndTime:     primitive.NewDateTimeFromTime(endTime),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		IsActive:    true,
@@ -97,6 +121,7 @@ func CreatePoll(c *gin.Context) {
 
 	_, err := db.Collection("polls").InsertOne(context.Background(), poll)
 	if err != nil {
+		log.Printf("Failed to create poll: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create poll"})
 		return
 	}
@@ -118,11 +143,69 @@ func ListPolls(c *gin.Context) {
 		return
 	}
 
+	log.Printf("ListPolls called by user: %s", userIDStr)
 	userID, _ := primitive.ObjectIDFromHex(userIDStr.(string))
 	db := c.MustGet("db").(*mongo.Database)
 
-	// Check if group_id is provided
+	// Check if user is admin
+	var user models.User
+	err := db.Collection("users").FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+	if err == nil && user.Role == models.RoleAdmin {
+		// Admin users can see all polls
+		// Call the admin function to list all polls
+		AdminListAllPolls(c, db)
+		return
+	}
+
+	// Get query parameters
 	groupIDStr := c.Query("group_id")
+	sortBy := c.Query("sort")
+	limitStr := c.Query("limit")
+	
+	log.Printf("ListPolls parameters: group_id=%s, sort=%s, limit=%s", groupIDStr, sortBy, limitStr)
+	
+	// Parse limit parameter
+	var limit int64 = 0 // 0 means no limit
+	if limitStr != "" {
+		limit64, err := strconv.ParseInt(limitStr, 10, 64)
+		if err != nil {
+			log.Printf("Invalid limit parameter: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+			return
+		}
+		limit = limit64
+	}
+	
+	// Update expired polls
+	now := time.Now()
+	nowTime := primitive.NewDateTimeFromTime(now)
+	_, err = db.Collection("polls").UpdateMany(
+		context.Background(),
+		bson.M{
+			"is_active": true,
+			"end_time": bson.M{"$lt": nowTime},
+		},
+		bson.M{"$set": bson.M{"is_active": false}},
+	)
+	if err != nil {
+		log.Printf("Error updating expired polls: %v", err)
+	}
+	
+	// Build find options
+	findOptions := options.Find()
+	if limit > 0 {
+		findOptions.SetLimit(limit)
+	}
+	
+	// Set sort order
+	if sortBy == "recent" {
+		findOptions.SetSort(bson.D{{"created_at", -1}})
+	} else {
+		// Default sort by creation time, newest first
+		findOptions.SetSort(bson.D{{"created_at", -1}})
+	}
+	
+	var filter bson.M
 	if groupIDStr != "" {
 		// Group-specific polls
 		groupID, err := primitive.ObjectIDFromHex(groupIDStr)
@@ -148,66 +231,48 @@ func ListPolls(c *gin.Context) {
 			return
 		}
 
-		// Fetch polls for the group
-		cursor, err := db.Collection("polls").Find(context.Background(), bson.M{"group_id": groupID})
+		filter = bson.M{"group_id": groupID}
+	} else {
+		// Get user's group memberships
+		cursor, err := db.Collection("group_members").Find(context.Background(), bson.M{
+			"user_id": userID,
+		})
 		if err != nil {
-			log.Printf("Error fetching polls: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch polls"})
+			log.Printf("Error fetching group memberships: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch group memberships"})
 			return
 		}
 		defer cursor.Close(context.Background())
 
-		var polls []models.Poll
-		if err = cursor.All(context.Background(), &polls); err != nil {
-			log.Printf("Error decoding polls: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode polls"})
+		var memberships []models.GroupMember
+		if err = cursor.All(context.Background(), &memberships); err != nil {
+			log.Printf("Error decoding group memberships: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode group memberships"})
 			return
 		}
 
-		c.JSON(http.StatusOK, polls)
-		return
-	}
+		// Get group IDs
+		var groupIDs []primitive.ObjectID
+		for _, membership := range memberships {
+			groupIDs = append(groupIDs, membership.GroupID)
+		}
 
-	// Get all accessible polls for the user
-	// 1. Get user's group memberships
-	cursor, err := db.Collection("group_members").Find(context.Background(), bson.M{
-		"user_id": userID,
-	})
-	if err != nil {
-		log.Printf("Error fetching group memberships: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch group memberships"})
-		return
-	}
-	defer cursor.Close(context.Background())
-
-	var memberships []models.GroupMember
-	if err = cursor.All(context.Background(), &memberships); err != nil {
-		log.Printf("Error decoding group memberships: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode group memberships"})
-		return
-	}
-
-	// Get group IDs
-	var groupIDs []primitive.ObjectID
-	for _, membership := range memberships {
-		groupIDs = append(groupIDs, membership.GroupID)
-	}
-
-	// Build query for polls
-	filter := bson.M{
-		"$or": []bson.M{
-			{"visibility": "public"},
-			{
-				"$and": []bson.M{
-					{"visibility": "group"},
-					{"group_id": bson.M{"$in": groupIDs}},
+		// Build query for polls
+		filter = bson.M{
+			"$or": []bson.M{
+				{"visibility": "public"},
+				{
+					"$and": []bson.M{
+						{"visibility": "group"},
+						{"group_id": bson.M{"$in": groupIDs}},
+					},
 				},
 			},
-		},
+		}
 	}
 
 	// Fetch polls
-	cursor, err = db.Collection("polls").Find(context.Background(), filter)
+	cursor, err := db.Collection("polls").Find(context.Background(), filter, findOptions)
 	if err != nil {
 		log.Printf("Error fetching polls: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch polls"})
@@ -222,7 +287,53 @@ func ListPolls(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, polls)
+	// Get user's votes for these polls
+	pollIDs := make([]primitive.ObjectID, len(polls))
+	for i, poll := range polls {
+		pollIDs[i] = poll.ID
+	}
+
+	// Find all votes by this user for these polls
+	votesCursor, err := db.Collection("votes").Find(context.Background(), bson.M{
+		"poll_id": bson.M{"$in": pollIDs},
+		"user_id": userID,
+	})
+	
+	// Create a map of poll ID to vote option ID
+	userVotes := make(map[primitive.ObjectID]primitive.ObjectID)
+	if err == nil {
+		defer votesCursor.Close(context.Background())
+		var votes []models.Vote
+		if err = votesCursor.All(context.Background(), &votes); err == nil {
+			for _, vote := range votes {
+				userVotes[vote.PollID] = vote.OptionID
+			}
+		}
+	}
+
+	// Create response with user votes
+	type PollWithUserVote struct {
+		models.Poll
+		UserVote string `json:"user_vote,omitempty"`
+	}
+
+	pollsWithVotes := make([]PollWithUserVote, len(polls))
+	for i, poll := range polls {
+		pollWithVote := PollWithUserVote{
+			Poll: poll,
+		}
+		
+		// Add user's vote if exists
+		if optionID, ok := userVotes[poll.ID]; ok {
+			pollWithVote.UserVote = optionID.Hex()
+			log.Printf("Adding user vote to poll %s: %s", poll.ID.Hex(), optionID.Hex())
+		}
+		
+		pollsWithVotes[i] = pollWithVote
+	}
+
+	log.Printf("Returning %d polls", len(pollsWithVotes))
+	c.JSON(http.StatusOK, pollsWithVotes)
 }
 
 // VoteRequest represents the request body for casting a vote
@@ -234,18 +345,23 @@ type VoteRequest struct {
 func Vote(c *gin.Context) {
 	pollID, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
+		log.Printf("Invalid poll ID format: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid poll ID"})
 		return
 	}
 
 	var req VoteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("Invalid vote request: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	log.Printf("Vote request received: Poll ID: %s, Option ID: %s", pollID.Hex(), req.OptionID)
+
 	optionID, err := primitive.ObjectIDFromHex(req.OptionID)
 	if err != nil {
+		log.Printf("Invalid option ID format: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid option ID"})
 		return
 	}
@@ -261,19 +377,33 @@ func Vote(c *gin.Context) {
 		"is_active": true,
 	}).Decode(&poll)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Poll not found"})
+		log.Printf("Poll not found or not active: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Poll not found or not active"})
 		return
 	}
+
+	// Check if poll has ended
+	now := time.Now()
+	endTime := poll.EndTime.Time()
+	if now.After(endTime) {
+		log.Printf("Poll has ended. End time: %v, Current time: %v", endTime, now)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Poll has ended"})
+		return
+	}
+
+	log.Printf("Poll found: %s, Options count: %d", poll.Title, len(poll.Options))
 
 	// Check if option belongs to poll
 	validOption := false
 	for _, opt := range poll.Options {
-		if opt.ID == optionID {
+		log.Printf("Checking option: %s (ID: %s) against requested option ID: %s", opt.Text, opt.ID.Hex(), optionID.Hex())
+		if opt.ID.Hex() == optionID.Hex() {
 			validOption = true
 			break
 		}
 	}
 	if !validOption {
+		log.Printf("Invalid option for poll: %s", optionID.Hex())
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid option for this poll"})
 		return
 	}
@@ -281,6 +411,7 @@ func Vote(c *gin.Context) {
 	// Start a session for the transaction
 	session, err := db.Client().StartSession()
 	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
 		return
 	}
@@ -309,36 +440,43 @@ func Vote(c *gin.Context) {
 
 			_, err = db.Collection("votes").InsertOne(ctx, vote)
 			if err != nil {
+				log.Printf("Failed to insert vote: %v", err)
 				return nil, err
 			}
 
 			// Increment vote count for the option
 			_, err = db.Collection("polls").UpdateOne(ctx,
-				bson.M{"_id": pollID, "options.id": optionID},
+				bson.M{"_id": pollID, "options._id": optionID},
 				bson.M{"$inc": bson.M{"options.$.vote_count": 1}},
 			)
+			if err != nil {
+				log.Printf("Failed to increment vote count: %v", err)
+			}
 			return nil, err
 		} else if err != nil {
+			log.Printf("Error checking for existing vote: %v", err)
 			return nil, err
 		}
 
 		// Update existing vote
-		if existingVote.OptionID != optionID {
+		if existingVote.OptionID.Hex() != optionID.Hex() {
 			// Decrement old option's vote count
 			_, err = db.Collection("polls").UpdateOne(ctx,
-				bson.M{"_id": pollID, "options.id": existingVote.OptionID},
+				bson.M{"_id": pollID, "options._id": existingVote.OptionID},
 				bson.M{"$inc": bson.M{"options.$.vote_count": -1}},
 			)
 			if err != nil {
+				log.Printf("Failed to decrement old option vote count: %v", err)
 				return nil, err
 			}
 
 			// Increment new option's vote count
 			_, err = db.Collection("polls").UpdateOne(ctx,
-				bson.M{"_id": pollID, "options.id": optionID},
+				bson.M{"_id": pollID, "options._id": optionID},
 				bson.M{"$inc": bson.M{"options.$.vote_count": 1}},
 			)
 			if err != nil {
+				log.Printf("Failed to increment new option vote count: %v", err)
 				return nil, err
 			}
 
@@ -352,6 +490,9 @@ func Vote(c *gin.Context) {
 					},
 				},
 			)
+			if err != nil {
+				log.Printf("Failed to update vote record: %v", err)
+			}
 			return nil, err
 		}
 
@@ -359,17 +500,36 @@ func Vote(c *gin.Context) {
 	})
 
 	if err != nil {
+		log.Printf("Transaction failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process vote"})
 		return
+	}
+
+	// Get the updated poll to return to the client
+	var updatedPoll models.Poll
+	err = db.Collection("polls").FindOne(context.Background(), bson.M{"_id": pollID}).Decode(&updatedPoll)
+	if err != nil {
+		log.Printf("Failed to fetch updated poll: %v", err)
+	}
+
+	// Add user_vote field to the response
+	type PollWithUserVote struct {
+		models.Poll
+		UserVote string `json:"user_vote"`
+	}
+
+	pollWithVote := PollWithUserVote{
+		Poll:     updatedPoll,
+		UserVote: optionID.Hex(),
 	}
 
 	// Send WebSocket notification
 	NotifyVoteUpdate(poll.GroupID.Hex(), pollID.Hex())
 
-	c.JSON(http.StatusOK, gin.H{"message": "Vote recorded successfully"})
+	c.JSON(http.StatusOK, pollWithVote)
 }
 
-// GetPoll returns a single poll by ID
+// GetPoll returns details of a specific poll
 func GetPoll(c *gin.Context) {
 	pollID, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
@@ -424,14 +584,20 @@ func GetPoll(c *gin.Context) {
 		"user_id": userID,
 	}).Decode(&vote)
 
-	// Add user's vote to the response
-	response := gin.H{
-		"poll":      poll,
-		"user_vote": nil,
-	}
-	if err == nil {
-		response["user_vote"] = vote.OptionID
+	// Create response with poll data and user vote
+	type PollWithUserVote struct {
+		models.Poll
+		UserVote string `json:"user_vote,omitempty"`
 	}
 
-	c.JSON(http.StatusOK, response)
+	pollWithVote := PollWithUserVote{
+		Poll: poll,
+	}
+
+	// Add user's vote if exists
+	if err == nil {
+		pollWithVote.UserVote = vote.OptionID.Hex()
+	}
+
+	c.JSON(http.StatusOK, pollWithVote)
 }
