@@ -14,9 +14,17 @@
 // ***********************************************************
 
 // Import commands.js using ES2015 syntax:
+
 import './commands'
 
 import { mount } from 'cypress/react'
+
+(window as any).process = {
+  env: {
+    NODE_ENV: 'development'
+  }
+};
+
 
 // Augment the Cypress namespace to include type definitions for
 // your custom command.
