@@ -90,8 +90,8 @@ func AdminDeleteGroup(c *gin.Context, db *mongo.Database) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Group deleted successfully",
-		"reason":  req.Reason,
+		"message":       "Group deleted successfully",
+		"reason":        req.Reason,
 		"deleted_polls": deleteResult.DeletedCount,
 	})
 }
@@ -173,9 +173,9 @@ func AdminDeletePoll(c *gin.Context, db *mongo.Database) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Poll deleted successfully",
-		"reason":  req.Reason,
-		"deleted_votes": deleteVotesResult.DeletedCount,
+		"message":          "Poll deleted successfully",
+		"reason":           req.Reason,
+		"deleted_votes":    deleteVotesResult.DeletedCount,
 		"deleted_comments": deleteCommentsResult.DeletedCount,
 	})
 }
@@ -187,7 +187,7 @@ func IsAdmin(userID primitive.ObjectID, db *mongo.Database) (models.User, bool) 
 	if err != nil {
 		return models.User{}, false
 	}
-	
+
 	return user, user.Role == models.RoleAdmin
 }
 
@@ -233,7 +233,7 @@ func AdminListAllGroups(c *gin.Context, db *mongo.Database) {
 	membershipCursor, err := db.Collection("group_members").Find(context.Background(), bson.M{
 		"user_id": userID,
 	})
-	
+
 	membershipMap := make(map[primitive.ObjectID]bool)
 	if err == nil {
 		defer membershipCursor.Close(context.Background())
@@ -244,7 +244,7 @@ func AdminListAllGroups(c *gin.Context, db *mongo.Database) {
 			}
 		}
 	}
-	
+
 	// Mark groups where the admin is a member
 	for i := range groups {
 		groups[i].IsMember = membershipMap[groups[i].ID]
@@ -279,7 +279,7 @@ func AdminListAllPolls(c *gin.Context, db *mongo.Database) {
 	// Get query parameters
 	sortBy := c.Query("sort")
 	limitStr := c.Query("limit")
-	
+
 	// Parse limit parameter
 	var limit int64 = 0 // 0 means no limit
 	if limitStr != "" {
@@ -291,7 +291,7 @@ func AdminListAllPolls(c *gin.Context, db *mongo.Database) {
 		}
 		limit = limit64
 	}
-	
+
 	// Update expired polls
 	now := time.Now()
 	nowTime := primitive.NewDateTimeFromTime(now)
@@ -299,20 +299,20 @@ func AdminListAllPolls(c *gin.Context, db *mongo.Database) {
 		context.Background(),
 		bson.M{
 			"is_active": true,
-			"end_time": bson.M{"$lt": nowTime},
+			"end_time":  bson.M{"$lt": nowTime},
 		},
 		bson.M{"$set": bson.M{"is_active": false}},
 	)
 	if err != nil {
 		log.Printf("Error updating expired polls: %v", err)
 	}
-	
+
 	// Build find options
 	findOptions := options.Find()
 	if limit > 0 {
 		findOptions.SetLimit(limit)
 	}
-	
+
 	// Set sort order
 	if sortBy == "recent" {
 		findOptions.SetSort(bson.D{{"created_at", -1}})
@@ -320,7 +320,7 @@ func AdminListAllPolls(c *gin.Context, db *mongo.Database) {
 		// Default sort by creation time, newest first
 		findOptions.SetSort(bson.D{{"created_at", -1}})
 	}
-	
+
 	// Fetch all polls
 	cursor, err := db.Collection("polls").Find(context.Background(), bson.M{}, findOptions)
 	if err != nil {
@@ -348,7 +348,7 @@ func AdminListAllPolls(c *gin.Context, db *mongo.Database) {
 		"poll_id": bson.M{"$in": pollIDs},
 		"user_id": userID,
 	})
-	
+
 	// Create a map of poll ID to vote option ID
 	userVotes := make(map[primitive.ObjectID]primitive.ObjectID)
 	if err == nil {
@@ -372,15 +372,41 @@ func AdminListAllPolls(c *gin.Context, db *mongo.Database) {
 		pollWithVote := PollWithUserVote{
 			Poll: poll,
 		}
-		
+
 		// Add user's vote if exists
 		if optionID, ok := userVotes[poll.ID]; ok {
 			pollWithVote.UserVote = optionID.Hex()
 		}
-		
+
 		pollsWithVotes[i] = pollWithVote
 	}
 
 	log.Printf("Admin %s (%s) fetched all %d polls", user.Username, user.ID.Hex(), len(pollsWithVotes))
 	c.JSON(http.StatusOK, pollsWithVotes)
 }
+
+// AdminHealthCheck provides a simple health status for the admin module
+func AdminHealthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "admin service is up",
+		"uptime":  time.Since(startTime).String(),
+		"version": "v1.0.0",
+	})
+}
+
+// AdminGetStats returns basic stats about admins in the system
+func AdminGetStats(c *gin.Context, db *mongo.Database) {
+	count, err := db.Collection("users").CountDocuments(context.Background(), bson.M{"role": models.RoleAdmin})
+	if err != nil {
+		log.Printf("Failed to count admin users: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get stats"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total_admins": count,
+	})
+}
+
+// Track server start time for uptime calculation (used in health check)
+var startTime = time.Now()
