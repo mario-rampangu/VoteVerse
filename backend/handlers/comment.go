@@ -217,3 +217,25 @@ func DeleteComment(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Comment deleted successfully"})
 }
+
+// CommentHealthCheck is a lightweight endpoint to confirm comment service is running
+func CommentHealthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "comment service is active",
+		"version": "v1.0.0",
+		"time":    time.Now().Format(time.RFC3339),
+	})
+}
+
+// AdminCountComments provides the total number of comments in the system
+func AdminCountComments(c *gin.Context) {
+	db := c.MustGet("db").(*mongo.Database)
+	count, err := db.Collection("comments").CountDocuments(context.Background(), bson.M{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count comments"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"total_comments": count,
+	})
+}
